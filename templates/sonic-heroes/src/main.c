@@ -78,6 +78,28 @@ done:
     return ok;
 }
 
+/* Optional APU voice trace hook (GENRY_FE_STACK). The APU references it even
+ * when the environment switch is off, so the host must provide a definition. */
+void genry_print_stack(const char* tag)
+{
+    void* frames[32];
+    USHORT count = CaptureStackBackTrace(1, 32, frames, NULL);
+    fprintf(stderr, "[FE-STACK] %s\n", tag ? tag : "");
+    SYMBOL_INFO* sym = (SYMBOL_INFO*)calloc(1, sizeof(SYMBOL_INFO) + 256);
+    if (!sym) return;
+    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+    sym->MaxNameLen = 255;
+    for (USHORT i = 0; i < count; ++i) {
+        DWORD64 displacement = 0;
+        if (SymFromAddr(GetCurrentProcess(), (DWORD64)(uintptr_t)frames[i], &displacement, sym))
+            fprintf(stderr, "  #%u %s+0x%llX\n", i, sym->Name, (unsigned long long)displacement);
+        else
+            fprintf(stderr, "  #%u 0x%llX\n", i, (unsigned long long)(uintptr_t)frames[i]);
+    }
+    free(sym);
+    fflush(stderr);
+}
+
 static LONG CALLBACK crash_handler(PEXCEPTION_POINTERS ep)
 {
     if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
