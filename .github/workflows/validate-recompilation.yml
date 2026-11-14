@@ -1,0 +1,70 @@
+name: Validate recompilation workflows
+
+on:
+  push:
+    paths:
+      - '.github/workflows/**'
+      - 'tools/ci/**'
+      - 'templates/sonic-heroes/**'
+      - 'templates/runtime/**'
+      - 'src/**'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-unit:
+    name: Workflow lint and image/pipeline tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install test tools
+        run: |
+          python -m pip install --disable-pip-version-check -r tools/ci/requirements.txt \
+            pytest==9.2.0 actionlint-py==1.7.12.25
+      - name: Lint GitHub Actions workflows
+        # The generated project ships its own CI; lint that template too.
+        run: |
+          actionlint -color .github/workflows/*.yml
+          actionlint -color templates/sonic-heroes/.github/workflows/*.yml
+      - name: Run no-game tests
+        run: >-
+          python -m pytest tools/ci tools/xiso/test_xdvdfs.py
+          tools/kernel_audit/test_gen_ordinal_remap.py -q
+
+  windows-synthetic:
+    name: Windows x64 synthetic compile and link
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Install pinned pipeline dependency
+        run: python -m pip install --disable-pip-version-check -r tools/ci/requirements.txt
+      - name: Generate, compile, link and package a synthetic XBE
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/ci/smoke_test.py --work-dir .work/smoke --jobs 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload synthetic diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Synthetic-Windows-Diagnostics
+          path: .work/smoke/diagnostics
+          if-no-files-found: warn
+          retention-days: 7

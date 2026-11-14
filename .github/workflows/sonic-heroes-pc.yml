@@ -1,0 +1,221 @@
+name: Sonic Heroes — PC (ISO → EXE + source)
+
+# GitHub's Run workflow form cannot attach a local file. Paste a direct HTTPS
+# URL to your own Original Xbox Sonic Heroes ISO/XISO. See docs/SONIC_HEROES_PC_RU.md.
+# The image is used only on the runner and is never uploaded as an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      iso_url:
+        description: 'Прямая HTTPS-ссылка на ваш ISO/XISO Sonic Heroes (Original Xbox)'
+        required: true
+        type: string
+      iso_sha256:
+        description: 'Необязательный SHA-256 образа (64 hex-символа)'
+        required: false
+        default: ''
+        type: string
+      d3d_device_ptr:
+        description: 'Необязательно: адрес указателя D3D-устройства в вашей XBE (напр. 0x0035FB48) — включает фиксы fence'
+        required: false
+        default: ''
+        type: string
+      d3d_put_off:
+        description: 'Смещение счётчика отправок в устройстве (пусто = 0x2C, XDK 5849)'
+        required: false
+        default: ''
+        type: string
+      d3d_get_ptr_off:
+        description: 'Смещение указателя «прочитано GPU» (пусто = 0x30, XDK 5849)'
+        required: false
+        default: ''
+        type: string
+      strict_translation:
+        description: 'Строго: остановить сборку, если хоть одна функция не переведена (по умолчанию — только предупреждение)'
+        required: false
+        default: false
+        type: boolean
+      build_jobs:
+        description: 'Параллельные задачи MSVC (меньше — меньше памяти)'
+        required: false
+        default: '2'
+        type: choice
+        options: ['2', '4', '1']
+      retention_days:
+        description: 'Срок хранения артефактов, дней'
+        required: false
+        default: '7'
+        type: choice
+        options: ['7', '14', '30']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sonic-heroes-pc-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  HEROES_WORK: ${{ github.workspace }}/.work/heroes-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  recompile:
+    name: Recompile and build Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - name: Check out OGlue
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Prepare private work directory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path "$env:HEROES_WORK/diagnostics" | Out-Null
+          if ('${{ github.repository_visibility }}' -eq 'public') {
+            $warning = 'Public repository: game and source artifacts contain derived game content. Use a private repository for images you do not have permission to redistribute.'
+            Write-Output "::warning::$warning"
+            [IO.File]::WriteAllText("$env:HEROES_WORK/diagnostics/visibility-warning.txt", $warning)
+          }
+
+      - name: Install pinned Python pipeline dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --disable-pip-version-check -r tools/ci/requirements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python --version
+          cmake --version
+
+      - name: Download the user's ISO
+        shell: pwsh
+        env:
+          ISO_URL: ${{ inputs.iso_url }}
+          ISO_SHA256: ${{ inputs.iso_sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:ISO_URL)) { throw 'iso_url is empty.' }
+          Write-Output "::add-mask::$($env:ISO_URL)"
+          python tools/ci/fetch_iso.py --url "$($env:ISO_URL)" --output "$env:HEROES_WORK/input.iso" --sha256 "$($env:ISO_SHA256)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Extract, analyze and recompile to C
+        shell: pwsh
+        env:
+          D3D_DEVICE_PTR: ${{ inputs.d3d_device_ptr }}
+          D3D_PUT_OFF: ${{ inputs.d3d_put_off }}
+          D3D_GET_PTR_OFF: ${{ inputs.d3d_get_ptr_off }}
+          STRICT_TRANSLATION: ${{ inputs.strict_translation }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fence = @()
+          if ($env:STRICT_TRANSLATION -eq 'true') { $fence += '--strict-translation' }
+          if (-not [string]::IsNullOrWhiteSpace($env:D3D_DEVICE_PTR)) {
+            $fence += @('--d3d-device-ptr', $env:D3D_DEVICE_PTR.Trim())
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:D3D_PUT_OFF)) {
+            $fence += @('--d3d-put-off', $env:D3D_PUT_OFF.Trim())
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:D3D_GET_PTR_OFF)) {
+            $fence += @('--d3d-get-ptr-off', $env:D3D_GET_PTR_OFF.Trim())
+          }
+          python -m tools.ci.heroes_build prepare --iso "$env:HEROES_WORK/input.iso" --work-dir "$env:HEROES_WORK" @fence
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Find D3D device pointer candidates
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Read-only heuristic: prints ranked candidates, never applies one.
+          python -m tools.ci.find_d3d_device "$env:HEROES_WORK/game/default.xbe" --json "$env:HEROES_WORK/diagnostics/d3d-device-candidates.json"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::warning::The D3D device pointer scan failed; see the log.'
+          }
+          $state = Get-Content "$env:HEROES_WORK/state.json" -Raw | ConvertFrom-Json
+          if (-not $state.d3d_fence.registered) {
+            $file = "$env:HEROES_WORK/diagnostics/d3d-device-candidates.json"
+            if (Test-Path $file) {
+              $candidates = Get-Content $file -Raw | ConvertFrom-Json
+              $lines = @('### D3D device pointer candidates (heuristic, not applied)',
+                         'Re-run with `d3d_device_ptr` set to enable the fence fixes.',
+                         '```')
+              foreach ($c in ($candidates | Select-Object -First 5)) {
+                $lines += "$($c.device_ptr_va)  score $($c.score)  cell in $($c.section), from $($c.code_section):$($c.evidence_va)"
+              }
+              if (-not $candidates) { $lines += 'No candidates: find the pointer by hand.' }
+              $lines += '```'
+              [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, ($lines -join "`n") + "`n")
+            }
+          }
+
+      - name: Build and package Windows x64
+        shell: pwsh
+        env:
+          BUILD_JOBS: ${{ inputs.build_jobs }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m tools.ci.heroes_build build --work-dir "$env:HEROES_WORK" --jobs "$($env:BUILD_JOBS)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload recompiled game (EXE only, no assets)
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SonicHeroes-PC-Windows-x64
+          path: ${{ env.HEROES_WORK }}/artifacts/game
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+          compression-level: 6
+
+      - name: Upload recompilation source (no original assets)
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SonicHeroes-PC-Recompilation-Source
+          path: ${{ env.HEROES_WORK }}/project
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+          compression-level: 9
+
+      - name: Upload diagnostics (no ISO, no game assets)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SonicHeroes-PC-Diagnostics
+          path: ${{ env.HEROES_WORK }}/diagnostics
+          if-no-files-found: warn
+          retention-days: ${{ inputs.retention_days }}
+          compression-level: 6
+
+      - name: Write run summary
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $state = Get-Content "$env:HEROES_WORK/state.json" -Raw | ConvertFrom-Json
+          $text = @"
+          ## Sonic Heroes PC
+          - Game artifact: **SonicHeroes-PC-Windows-x64** (EXE + instructions, no game assets)
+          - Source artifact: **SonicHeroes-PC-Recompilation-Source**
+          - Add your own game files to `game/` — see `HOW-TO-ADD-GAME-FILES.md` inside the game artifact.
+          - XBE SHA-256: ``$($state.xbe.sha256)``
+          - EXE SHA-256: ``$($state.executable.sha256)``
+          - Translated functions: $($state.translation.translated)/$($state.translation.total)
+          - Translation warnings: $($state.translation.warnings -join '; ')
+          - Fence mirror registered: $($state.d3d_fence.registered)
+          - Compiled and PE-checked; **runtime/playability not tested**.
+          - OGlue's Heroes fixes are in the runtime; without a D3D device pointer the fence ones stay dormant. Treat the result as experimental.
+          "@
+          [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, $text + "`n")
