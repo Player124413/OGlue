@@ -30,6 +30,11 @@ if __package__ in (None, ""):
 TEMPLATE = ROOT / "templates" / "sonic-heroes"
 HEROES_TITLE_ID = 0x5345002B
 EXE_NAME = "SonicHeroesPC.exe"
+# XDK 5849 D3D device layout: the submitted counter and the pointer to the
+# GPU-read word (docs/technical/d3d8ltcg-device-context.md). Only the address
+# of the device pointer itself is title-specific.
+DEFAULT_D3D_PUT_OFF = 0x2C
+DEFAULT_D3D_GET_PTR_OFF = 0x30
 CHUNK = 1024 * 1024
 MAX_DISC_BYTES = 8 * 1024 * 1024 * 1024
 MAX_DISC_FILES = 100_000
@@ -193,7 +198,9 @@ def inspect_xbe(xbe_path: Path, *, require_heroes: bool = True) -> dict:
     warnings = []
     if 5849 not in builds:
         warnings.append("XDK 5849 was not reported; runtime structure offsets are not verified for this build.")
-    warnings.append("No title-specific Heroes D3D device/fence hooks are present in this repository.")
+    warnings.append("Retail boot is not verified by CI. OGlue's Heroes fixes live in the "
+                    "runtime; the fence ones also need the title's D3D device pointer "
+                    "(--d3d-device-ptr), which is not set by default.")
     return {
         "title": title or "Synthetic OGlue test",
         "title_id": f"{cert.title_id:08X}",
@@ -262,8 +269,47 @@ def source_provenance(toolkit: Path) -> dict:
         return {"commit": None, "dirty": True}
 
 
+def _parse_hex(text: str) -> int:
+    value = (text or "").strip()
+    if not re.fullmatch(r"(?:0[xX])?[0-9a-fA-F]{1,8}", value):
+        raise PipelineError("Expected up to 8 hex digits, e.g. 0x0035D6A0 or 2C.")
+    return int(value, 16)
+
+
+def parse_guest_va(text: str) -> int:
+    address = _parse_hex(text)
+    if not 0x10000 <= address < 0x04000000 or address & 3:
+        raise PipelineError("The D3D device pointer must be a 4-byte-aligned address "
+                            "inside the XBE image (0x00010000..0x03FFFFFF).")
+    return address
+
+
+def parse_offset(text: str) -> int:
+    offset = _parse_hex(text)
+    if offset > 0xFFFF or offset & 3:
+        raise PipelineError("A device field offset must be 4-byte aligned and below 0xFFFF.")
+    return offset
+
+
+def fence_config(device_ptr: str, put_off: str = "", get_ptr_off: str = "") -> dict | None:
+    """The one per-title datum the runtime's Heroes fence fixes need.
+
+    xbox_Nv2aMirrorFence() has no caller in src/: a game project registers the
+    address of its D3D device pointer. Without it xbox_Nv2aFenceWordVa() and
+    xbox_Nv2aBusyEventVa() return 0, so GENRY_HONEST_FENCE and the busy-block
+    wait in kernel_bridge.c stay dormant.
+    """
+    if not (device_ptr or "").strip():
+        if (put_off or "").strip() or (get_ptr_off or "").strip():
+            raise PipelineError("Set d3d_device_ptr as well; offsets alone mean nothing.")
+        return None
+    put = parse_offset(put_off) if (put_off or "").strip() else DEFAULT_D3D_PUT_OFF
+    get = parse_offset(get_ptr_off) if (get_ptr_off or "").strip() else DEFAULT_D3D_GET_PTR_OFF
+    return {"device_ptr_va": parse_guest_va(device_ptr), "put_off": put, "get_ptr_off": get}
+
+
 def scaffold_project(project: Path, metadata: dict, *, toolkit: Path = ROOT,
-                     template: Path = TEMPLATE) -> dict:
+                     template: Path = TEMPLATE, fence: dict | None = None) -> dict:
     if project.exists():
         raise PipelineError("The project directory already exists; use a fresh work directory.")
     if not (template / "CMakeLists.txt").is_file():
@@ -280,11 +326,18 @@ def scaffold_project(project: Path, metadata: dict, *, toolkit: Path = ROOT,
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(toolkit / relative, destination)
     entry = int(metadata["entry_point"], 16)
+    fence = fence or {}
+    device = fence.get("device_ptr_va", 0)
+    (project / "src").mkdir(parents=True, exist_ok=True)
     (project / "src" / "game_config.h").write_text(
         "/* Generated from the supplied XBE; do not reuse with another dump. */\n"
         "#ifndef HEROES_GAME_CONFIG_H\n#define HEROES_GAME_CONFIG_H\n"
         f"#define HEROES_ENTRY_POINT 0x{entry:08X}u\n"
         f'#define HEROES_XBE_SHA256 "{metadata["sha256"]}"\n'
+        "/* 0 = not supplied: the runtime's fence mirror stays unregistered. */\n"
+        f"#define HEROES_D3D_DEVICE_PTR 0x{device:08X}u\n"
+        f"#define HEROES_D3D_PUT_OFF 0x{fence.get('put_off', DEFAULT_D3D_PUT_OFF):X}u\n"
+        f"#define HEROES_D3D_GET_PTR_OFF 0x{fence.get('get_ptr_off', DEFAULT_D3D_GET_PTR_OFF):X}u\n"
         "#endif\n", encoding="utf-8")
     return source_provenance(toolkit)
 
@@ -471,7 +524,7 @@ def build(work: Path, jobs: int = 2) -> dict:
 
 
 def prepare(iso: Path, work: Path, *, toolkit: Path = ROOT,
-            template: Path = TEMPLATE) -> dict:
+            template: Path = TEMPLATE, fence: dict | None = None) -> dict:
     if (work / "state.json").exists() or (work / "project").exists():
         raise PipelineError("Use a fresh work directory; this command will not overwrite a run.")
     if not iso.is_file():
@@ -489,7 +542,14 @@ def prepare(iso: Path, work: Path, *, toolkit: Path = ROOT,
     state["disc"] = extract_disc(iso, work / "game")
     state["xbe"] = inspect_xbe(work / "game" / "default.xbe")
     state["source"] = scaffold_project(work / "project", state["xbe"],
-                                       toolkit=toolkit, template=template)
+                                       toolkit=toolkit, template=template, fence=fence)
+    state["d3d_fence"] = fence or {"registered": False}
+    if fence:
+        state["d3d_fence"] = dict(fence, registered=True)
+    else:
+        state["xbe"]["warnings"].append(
+            "No D3D device pointer supplied: the fence mirror is unregistered, so "
+            "GENRY_HONEST_FENCE and the D3D busy-block wait stay dormant.")
     state["status"] = "prepared"
     _copy_state(work, state)
     recompile(work, state)
@@ -520,13 +580,22 @@ def main(argv=None) -> int:
         p.add_argument("--work-dir", type=Path, required=True)
         if name != "build":
             p.add_argument("--iso", type=Path, required=True)
+            p.add_argument("--d3d-device-ptr", default="",
+                           help="guest VA of the title's D3D device pointer, e.g. 0x0035D6A0; "
+                                "registers the runtime fence mirror (Heroes fence fixes)")
+            p.add_argument("--d3d-put-off", default="",
+                           help=f"device submitted-counter offset (default 0x{DEFAULT_D3D_PUT_OFF:X})")
+            p.add_argument("--d3d-get-ptr-off", default="",
+                           help=f"device GPU-read-pointer offset (default 0x{DEFAULT_D3D_GET_PTR_OFF:X})")
         if name != "prepare":
             p.add_argument("--jobs", type=int, default=2)
     args = parser.parse_args(argv)
     work = args.work_dir.resolve()
     try:
         if args.command in ("prepare", "all"):
-            prepare(args.iso.resolve(), work)
+            prepare(args.iso.resolve(), work,
+                    fence=fence_config(args.d3d_device_ptr, args.d3d_put_off,
+                                       args.d3d_get_ptr_off))
         if args.command in ("build", "all"):
             build(work, args.jobs)
     except PipelineError as exc:

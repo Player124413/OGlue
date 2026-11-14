@@ -15,6 +15,21 @@ on:
         required: false
         default: ''
         type: string
+      d3d_device_ptr:
+        description: 'Необязательно: адрес указателя D3D-устройства в вашей XBE (напр. 0x0035D6A0) — включает фиксы fence'
+        required: false
+        default: ''
+        type: string
+      d3d_put_off:
+        description: 'Смещение счётчика отправок в устройстве (пусто = 0x2C, XDK 5849)'
+        required: false
+        default: ''
+        type: string
+      d3d_get_ptr_off:
+        description: 'Смещение указателя «прочитано GPU» (пусто = 0x30, XDK 5849)'
+        required: false
+        default: ''
+        type: string
       build_jobs:
         description: 'Параллельные задачи MSVC (меньше — меньше памяти)'
         required: false
@@ -92,9 +107,23 @@ jobs:
 
       - name: Extract, analyze and recompile to C
         shell: pwsh
+        env:
+          D3D_DEVICE_PTR: ${{ inputs.d3d_device_ptr }}
+          D3D_PUT_OFF: ${{ inputs.d3d_put_off }}
+          D3D_GET_PTR_OFF: ${{ inputs.d3d_get_ptr_off }}
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m tools.ci.heroes_build prepare --iso "$env:HEROES_WORK/input.iso" --work-dir "$env:HEROES_WORK"
+          $fence = @()
+          if (-not [string]::IsNullOrWhiteSpace($env:D3D_DEVICE_PTR)) {
+            $fence += @('--d3d-device-ptr', $env:D3D_DEVICE_PTR.Trim())
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:D3D_PUT_OFF)) {
+            $fence += @('--d3d-put-off', $env:D3D_PUT_OFF.Trim())
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:D3D_GET_PTR_OFF)) {
+            $fence += @('--d3d-get-ptr-off', $env:D3D_GET_PTR_OFF.Trim())
+          }
+          python -m tools.ci.heroes_build prepare --iso "$env:HEROES_WORK/input.iso" --work-dir "$env:HEROES_WORK" @fence
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build and package Windows x64
@@ -149,7 +178,8 @@ jobs:
           - XBE SHA-256: ``$($state.xbe.sha256)``
           - EXE SHA-256: ``$($state.executable.sha256)``
           - Translated functions: $($state.translation.translated)/$($state.translation.total)
+          - Fence mirror registered: $($state.d3d_fence.registered)
           - Compiled and PE-checked; **runtime/playability not tested**.
-          - This checkout has no title-specific Heroes D3D device/fence hooks; treat the result as experimental.
+          - OGlue's Heroes fixes are in the runtime; without a D3D device pointer the fence ones stay dormant. Treat the result as experimental.
           "@
           [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, $text + "`n")

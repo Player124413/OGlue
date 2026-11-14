@@ -2,9 +2,12 @@
  * SonicHeroesPC - generic OGlue host generated from the user's XBE.
  *
  * This is a buildable bring-up host, not a claim of a finished Heroes port.
- * The repository currently lacks the title-specific D3D device/fence wiring
- * described in docs/technical/d3d8ltcg-device-context.md. No addresses for
- * those hooks are guessed here.
+ * OGlue's Heroes fixes are in the shared runtime (DISPATCH gate, DPC timing,
+ * pushbuffer ring, honest fence, busy-block wait, threaded vertices). Two of
+ * them need one per-title number: the guest address of the D3D device pointer,
+ * which a game project hands to xbox_Nv2aMirrorFence(). Nothing in src/ calls
+ * it, so this host does -- when HEROES_D3D_DEVICE_PTR was supplied. It is never
+ * guessed: a wrong address would name the wrong guest word.
  */
 #include <windows.h>
 #include <bcrypt.h>
@@ -203,6 +206,26 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command, int sh
         free(xbe);
         return fail("APU/audio initialization failed. Check the Windows audio device.");
     }
+
+    /* The fence mirror is what makes two of the Heroes-era runtime fixes live:
+     *   - xbox_Nv2aFenceWordVa() names the semaphore the executor writes under
+     *     GENRY_HONEST_FENCE (save-card flicker, torn models);
+     *   - xbox_Nv2aBusyEventVa() finds D3D's KEVENT at device+0x1DCC, which the
+     *     busy-block wait in kernel_bridge.c polls (the NOW LOADING 0 FPS hang).
+     * Both return 0 while no device is registered, so say so either way. */
+#if HEROES_D3D_DEVICE_PTR != 0
+    if (xbox_Nv2aMirrorFence(HEROES_D3D_DEVICE_PTR, HEROES_D3D_PUT_OFF,
+                             HEROES_D3D_GET_PTR_OFF) == 0) {
+        default_env("GENRY_HONEST_FENCE", "1");
+        fprintf(stderr, "[BOOT] fence mirror registered: device ptr 0x%08X\n",
+                (unsigned)HEROES_D3D_DEVICE_PTR);
+    } else {
+        fprintf(stderr, "[BOOT] fence mirror table full; fence fixes stay off\n");
+    }
+#else
+    fprintf(stderr, "[BOOT] no D3D device pointer supplied: honest fence and the "
+                    "D3D busy-block wait stay dormant (see docs/SONIC_HEROES_PC_RU.md)\n");
+#endif
 
     /* XDK 5849 numbers some kernel exports differently. The map is generated
      * from this XBE's imports, not copied from another game. */

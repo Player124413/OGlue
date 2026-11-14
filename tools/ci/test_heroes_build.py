@@ -127,6 +127,39 @@ def test_scaffold_writes_exact_entry_and_source_manifest(tmp_path):
         H.finalize_source(tmp_path / "work", {})
 
 
+def test_fence_config_defaults_and_validation():
+    assert H.fence_config("") is None
+    assert H.fence_config("  ") is None
+    fence = H.fence_config("0x0035D6A0")
+    assert fence == {"device_ptr_va": 0x0035D6A0, "put_off": 0x2C, "get_ptr_off": 0x30}
+    assert H.fence_config("35D6A0", "2C", "30") == fence
+    with pytest.raises(H.PipelineError, match="offsets alone"):
+        H.fence_config("", "2C")
+    for bad in ("0x10", "0x04000000", "0x0035D6A1", "nonsense", "0x123456789"):
+        with pytest.raises(H.PipelineError):
+            H.fence_config(bad)
+    with pytest.raises(H.PipelineError, match="offset"):
+        H.fence_config("0x0035D6A0", "0x2E")
+
+
+def test_scaffold_records_fence_pointer(tmp_path):
+    toolkit, template = tmp_path / "toolkit", tmp_path / "template"
+    (toolkit / "src").mkdir(parents=True)
+    (template / "src").mkdir(parents=True)
+    (toolkit / "CMakeLists.txt").write_text("project(test C)\n")
+    (template / "CMakeLists.txt").write_text("project(SonicHeroesPC C)\n")
+    metadata = {"entry_point": f"0x{TEXT_VA:08X}", "sha256": "b" * 64}
+    H.scaffold_project(tmp_path / "off", metadata, toolkit=toolkit, template=template)
+    assert "#define HEROES_D3D_DEVICE_PTR 0x00000000u" in (
+        tmp_path / "off" / "src" / "game_config.h").read_text()
+    H.scaffold_project(tmp_path / "on", metadata, toolkit=toolkit, template=template,
+                       fence=H.fence_config("0x0035D6A0"))
+    config = (tmp_path / "on" / "src" / "game_config.h").read_text()
+    assert "#define HEROES_D3D_DEVICE_PTR 0x0035D6A0u" in config
+    assert "#define HEROES_D3D_PUT_OFF 0x2Cu" in config
+    assert "#define HEROES_D3D_GET_PTR_OFF 0x30u" in config
+
+
 def test_pe_summary_requires_x64_pe32plus(tmp_path):
     exe = tmp_path / "bad.exe"
     exe.write_bytes(b"MZ")
