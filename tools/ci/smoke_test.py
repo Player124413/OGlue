@@ -78,6 +78,19 @@ def main(argv=None) -> int:
         run(args.work_dir.resolve(), args.jobs, args.generate_only)
     except (H.PipelineError, AssertionError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
+        # Surface compiler/linker failures as annotations as well as log text.
+        # They remain readable when a client cannot fetch the raw runner log.
+        emitted = 0
+        for log in sorted((args.work_dir / "diagnostics").glob("*.log")):
+            for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+                if any(token in line for token in ("error C", "fatal error", "LNK", "CMake Error", "ERROR:")):
+                    safe = line.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                    print(f"::error file={log.name}::{safe}")
+                    emitted += 1
+                    if emitted >= 10:
+                        break
+            if emitted >= 10:
+                break
         return 1
     return 0
 
