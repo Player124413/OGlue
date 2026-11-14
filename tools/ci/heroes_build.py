@@ -167,7 +167,7 @@ def extract_disc(iso_path: Path, game_dir: Path) -> dict:
 
 
 def inspect_xbe(xbe_path: Path, *, require_heroes: bool = True) -> dict:
-    from tools.xbe_parser.xbe_parser import XBEParser
+    from tools.xbe_parser.xbe_parser import XBEParser, format_region
 
     try:
         xbe = XBEParser(str(xbe_path)).parse()
@@ -179,7 +179,8 @@ def inspect_xbe(xbe_path: Path, *, require_heroes: bool = True) -> dict:
                            or title.casefold() != "sonic heroes"):
         raise PipelineError(
             f"This workflow expects Sonic Heroes (title ID 5345002B), got "
-            f"{title!r} / {cert.title_id:08X}. Use an original Xbox retail image.")
+            f"{title!r} / {cert.title_id:08X}. Use an original Xbox retail image; "
+            "the USA, Europe and Japan releases all carry title ID 5345002B.")
     if header.is_debug:
         raise PipelineError("Debug/devkit XBEs are not supported by this retail workflow.")
     code = [section for section in xbe.sections if section.flags & 0x4]
@@ -196,7 +197,11 @@ def inspect_xbe(xbe_path: Path, *, require_heroes: bool = True) -> dict:
     return {
         "title": title or "Synthetic OGlue test",
         "title_id": f"{cert.title_id:08X}",
+        # USA/NTSC, Europe/PAL and Japan share one title ID; the region only
+        # changes which certificate bit XAPI checks, and the runtime answers
+        # with every region plus NTSC-M 60 Hz (src/kernel/kernel_xbox.c).
         "region_flags": f"0x{cert.game_region & 7:X}",
+        "region": format_region(cert.game_region),
         "entry_point": f"0x{header.entry_point:08X}",
         "base_address": f"0x{header.base_address:08X}",
         "xdk_builds": builds,

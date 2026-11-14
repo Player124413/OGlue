@@ -49,6 +49,20 @@ def test_inspects_synthetic_but_rejects_wrong_title(tmp_path):
     assert metadata["kernel_imports"] == 1
 
 
+@pytest.mark.parametrize("flag,name", [(1, "North America"), (2, "Japan"),
+                                       (4, "Rest of World")])
+def test_records_disc_region(tmp_path, flag, name):
+    # USA / Japan / Europe releases share title ID 5345002B and differ only in
+    # this certificate bit, so all three must reach the pipeline.
+    data = bytearray(synthetic_xbe())
+    struct.pack_into("<I", data, 0x200 + 160, flag)
+    xbe = tmp_path / "default.xbe"
+    xbe.write_bytes(data)
+    metadata = H.inspect_xbe(xbe, require_heroes=False)
+    assert metadata["region"] == name
+    assert metadata["region_flags"] == f"0x{flag:X}"
+
+
 def _dispatch(tmp_path, entry=TEXT_VA):
     path = tmp_path / "recomp_dispatch.c"
     path.write_text("static const table[] = {\n"

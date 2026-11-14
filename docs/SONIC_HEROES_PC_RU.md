@@ -29,6 +29,32 @@ Workflow: [`.github/workflows/sonic-heroes-pc.yml`](../.github/workflows/sonic-h
    выдумывает эти адреса. Успешная компиляция и проверка PE не означают, что игра загрузилась,
    прошла меню или прошла проверку звука/графики. Статус честно записан в `BUILD-INFO.json`.
 
+## Какой образ подходит: USA, Europe или Japan
+
+Все три региональных издания Sonic Heroes для Original Xbox несут **один и тот же
+title ID `5345002B`**, поэтому проверка workflow принимает любое из них. Регион
+записывается в `BUILD-INFO.json` (`region`, `region_flags`).
+
+| Издание | Бит региона в сертификате | Комментарий |
+|---|---|---|
+| USA (En,Ja,Fr,De,Es,It) | `0x1` — North America | NTSC/60 Гц; наиболее прямой вариант для этого runtime |
+| Europe (En,Ja,Fr,De,Es,It) | `0x4` — Rest of World | PAL-издание; runtime всё равно отвечает NTSC-M 60 Гц |
+| Japan | `0x2` — Japan | тот же title ID |
+
+**USA-версию использовать можно.** Более того, runtime и так представляет себя
+консолью NTSC-M 60 Гц со всеми разрешёнными регионами
+(`src/kernel/kernel_xbox.c`: `XC_FACTORY_GAME_REGION = 7`, `XC_FACTORY_AV_REGION = NTSC_M | 60Hz`),
+а темп кадров рассчитан на 60 Гц — так что NTSC-образ не требует никаких
+дополнительных настроек.
+
+Адреса функций и entry point берутся из **вашего** `default.xbe`, а не из
+зашитого списка, поэтому смена региона не ломает генерацию кода. Побочный эффект:
+EXE из одного дампа нельзя запускать с `game` из другого — host сверяет SHA-256.
+
+Не подходят: PC-версия игры, издание для Xbox 360 (GOD/обёртка), ZIP/RAR вместо
+образа, debug/devkit XBE. Redump-образ с video partition впереди поддерживается —
+смещение game partition находится probing'ом.
+
 ## Запуск на GitHub
 
 1. Откройте **Actions → Sonic Heroes — PC (ISO → EXE + source)**.
