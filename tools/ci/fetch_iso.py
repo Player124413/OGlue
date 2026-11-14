@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -55,7 +56,8 @@ def validate_url(url: str, *, allow_private: bool = False) -> str:
         ip = ipaddress.ip_address(item[4][0])
         if not allow_private and not ip.is_global:
             raise FetchError("The ISO URL must resolve to public addresses.")
-    return urllib.parse.urlunsplit(("https", parts.netloc, parts.path or "/", parts.query, ""))
+    netloc = host if parts.port is None else f"{host}:{parts.port}"
+    return urllib.parse.urlunsplit(("https", netloc, parts.path or "/", parts.query, ""))
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -176,6 +178,9 @@ def main(argv=None) -> int:
         return 1
     except OSError:
         print("ERROR: Could not write the ISO download.", flush=True)
+        return 1
+    except http.client.HTTPException:
+        print("ERROR: The ISO server sent an invalid HTTP response.", flush=True)
         return 1
     print(json.dumps({"downloaded": result}, sort_keys=True), flush=True)
     return 0
