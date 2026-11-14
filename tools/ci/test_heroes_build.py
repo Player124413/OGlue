@@ -265,6 +265,12 @@ def test_finalize_source_rejects_the_player_launcher(tmp_path):
     (project / "CMakeLists.txt").write_text("project(x C)\n")
     H.finalize_source(work, {})
     assert (project / "SOURCE-MANIFEST.json").is_file()
+    # The vendored toolkit legitimately ships the launcher template; only a
+    # launcher at the repository root is a packaging mistake.
+    nested = project / "oglue" / "templates" / "sonic-heroes-package"
+    nested.mkdir(parents=True)
+    (nested / H.LAUNCHER_NAME).write_text("@echo off\n")
+    H.finalize_source(work, {})
     (project / H.LAUNCHER_NAME).write_text("@echo off\n")
     with pytest.raises(H.PipelineError, match="launcher"):
         H.finalize_source(work, {})

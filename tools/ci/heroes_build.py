@@ -613,12 +613,16 @@ def finalize_source(work: Path, state: dict) -> None:
     """The source artifact is a publishable repo: code, CI, docs -- no launcher."""
     project = work / "project"
     for path in project.rglob("*"):
-        if not path.is_file():
-            continue
-        if path.suffix.lower() in GAME_SUFFIXES:
+        if path.is_file() and path.suffix.lower() in GAME_SUFFIXES:
             raise PipelineError("Refusing to upload original game data in the source artifact.")
-        if path.name == LAUNCHER_NAME:
-            raise PipelineError("The player launcher belongs to the game artifact, not the source.")
+    # Only the repository root matters here. The vendored toolkit under oglue/
+    # legitimately carries templates/sonic-heroes-package/Launch-SonicHeroes.cmd
+    # because regeneration needs it; that is toolkit source, not a stray launcher.
+    for path in project.iterdir():
+        if path.is_file() and (path.suffix.lower() == ".cmd" or path.name == LAUNCHER_NAME):
+            raise PipelineError(
+                f"{path.name}: the player launcher belongs to the game artifact, "
+                "not to the publishable source repository.")
     write_json(project / "SOURCE-MANIFEST.json", {
         "note": "Generated C is derived from the user's XBE. Original assets are not included.",
         "files": _hash_tree(project, {"SOURCE-MANIFEST.json"}),
