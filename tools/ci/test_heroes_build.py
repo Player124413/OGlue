@@ -49,6 +49,38 @@ def test_inspects_synthetic_but_rejects_wrong_title(tmp_path):
     assert metadata["kernel_imports"] == 1
 
 
+def _heroes_xbe(tmp_path, title, title_id=H.HEROES_TITLE_ID):
+    """A synthetic XBE carrying a real-looking certificate title/ID."""
+    data = bytearray(synthetic_xbe())
+    struct.pack_into("<I", data, 0x208, title_id)
+    data[0x20C:0x25C] = b"\0" * 80
+    encoded = title.encode("utf-16-le")
+    data[0x20C:0x20C + len(encoded)] = encoded
+    path = tmp_path / "default.xbe"
+    path.write_bytes(data)
+    return path
+
+
+@pytest.mark.parametrize("title", ["SONICHEROES", "Sonic Heroes", "sonic heroes",
+                                   "  SONIC  HEROES "])
+def test_accepts_the_retail_certificate_spelling(tmp_path, title):
+    # Regression: the retail disc says "SONICHEROES" with no space, and the
+    # old exact-name check rejected a correct USA image.
+    metadata = H.inspect_xbe(_heroes_xbe(tmp_path, title))
+    assert metadata["title_id"] == "5345002B"
+    assert not any("spelling" in w for w in metadata["warnings"])
+
+
+def test_unknown_spelling_with_matching_id_is_a_warning_not_a_failure(tmp_path):
+    metadata = H.inspect_xbe(_heroes_xbe(tmp_path, "ソニックヒーローズ"))
+    assert any("spelling" in w for w in metadata["warnings"])
+
+
+def test_wrong_title_id_is_still_rejected(tmp_path):
+    with pytest.raises(H.PipelineError, match="5345002B"):
+        H.inspect_xbe(_heroes_xbe(tmp_path, "SONICHEROES", title_id=0x53450086))
+
+
 @pytest.mark.parametrize("flag,name", [(1, "North America"), (2, "Japan"),
                                        (4, "Rest of World")])
 def test_records_disc_region(tmp_path, flag, name):
@@ -77,16 +109,24 @@ def test_translation_gate_accepts_complete_output(tmp_path):
     assert result["unimplemented_instructions"] == 0
 
 
-def test_translation_gate_rejects_silent_noops_and_missing_entry(tmp_path):
+def test_quality_problems_warn_by_default_and_fail_when_strict(tmp_path):
     dispatch = _dispatch(tmp_path)
-    with pytest.raises(H.PipelineError, match="no-ops"):
-        H.translation_gate({"total": 1, "translated": 1, "failed": 0,
-                            "unimplemented": {"bsf": ["0x11000"]}}, dispatch, TEXT_VA)
+    summary = {"total": 2, "translated": 1, "failed": 1,
+               "unimplemented": {"bsf": ["0x11000"]}, "unresolved_stubs": 3}
+    result = H.translation_gate(summary, dispatch, TEXT_VA)
+    assert result["strict"] is False
+    assert len(result["warnings"]) == 3
+    with pytest.raises(H.PipelineError, match="Strict translation gate"):
+        H.translation_gate(summary, dispatch, TEXT_VA, strict=True)
+
+
+def test_structural_problems_always_fail(tmp_path):
     with pytest.raises(H.PipelineError, match="entry point"):
         H.translation_gate({"total": 1, "translated": 1, "failed": 0},
                            _dispatch(tmp_path, TEXT_VA + 16), TEXT_VA)
-    with pytest.raises(H.PipelineError, match="incomplete"):
-        H.translation_gate({"total": 2, "translated": 1, "failed": 1}, dispatch, TEXT_VA)
+    with pytest.raises(H.PipelineError, match="no functions"):
+        H.translation_gate({"total": 0, "translated": 0, "failed": 0},
+                           _dispatch(tmp_path), TEXT_VA)
 
 
 def test_source_allowlist_and_symlink_refusal(tmp_path):

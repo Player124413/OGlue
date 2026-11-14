@@ -168,6 +168,7 @@ EXE из одного дампа нельзя запускать с `game` из 
 | `iso_sha256` | необязательный SHA-256 всего файла образа, 64 hex-символа; рекомендуется |
 | `d3d_device_ptr` | необязательный адрес указателя D3D-устройства; включает фиксы fence (см. выше) |
 | `d3d_put_off`, `d3d_get_ptr_off` | необязательные смещения; по умолчанию `0x2C` и `0x30` |
+| `strict_translation` | выключено; включите, чтобы любая непереведённая функция останавливала сборку |
 | `build_jobs` | `2` по умолчанию; `1` для меньшего расхода памяти, `4` для более быстрой сборки |
 | `retention_days` | `7` по умолчанию; также `14` или `30`, с учётом лимита репозитория |
 
@@ -186,13 +187,19 @@ EXE из одного дампа нельзя запускать с `game` из 
 
 1. Потоковое скачивание с лимитом размера/времени и проверкой SHA-256, если он задан.
 2. Чтение XDVDFS встроенным `tools.xiso`, проверка путей и извлечение всего дерева игры.
-3. Проверка root `default.xbe`: retail, title ID `5345002B`, имя `Sonic Heroes`.
+3. Проверка root `default.xbe`: retail и title ID `5345002B`. Имя в сертификате
+   проверяется мягко: на розничном диске оно записано как `SONICHEROES` (без пробела),
+   в других изданиях может отличаться — при совпавшем title ID это лишь предупреждение.
    Поддерживаются известные смещения game partition, включая несколько redump-layout.
    Образы Xbox 360/GOD, PC-версия, ZIP/RAR и debug XBE не подходят.
 4. `xbe_parser → disasm → func_id → abi_analysis`, генерация per-title kernel ordinal remap.
 5. `tools.recomp --all --split 250`: весь обнаруженный код переводится в C.
-6. Проверки: нет failed-функций и unimplemented-инструкций, entry point присутствует в
-   dispatch table. Unresolved call stubs и неизвестные kernel imports попадают в предупреждения.
+6. Проверки: entry point присутствует в dispatch table и переведена хотя бы одна функция —
+   это жёсткие условия. Непереведённые функции, no-op инструкции, unresolved-заглушки и
+   неизвестные kernel imports по умолчанию попадают в **предупреждения** (видны в сводке
+   запуска и в `BUILD-INFO.json`), потому что у крупной игры они почти всегда есть.
+   Флаг `strict_translation` возвращает строгое поведение: любая такая проблема
+   останавливает сборку.
 7. CMake + Visual Studio 2022, Release x64, статический CRT. Проверка PE32+/x64.
 8. Раздельная упаковка игры и исходников. Исходный артефакт не содержит `.xbe`, ISO,
    текстуры, аудио или видео; игровой артефакт содержит данные, необходимые runtime.
@@ -243,8 +250,8 @@ Host сверяет SHA-256 `game\default.xbe`, чтобы не запустит
 | HTTP 403/404 | ссылка истекла, требует вход или отдаёт страницу вместо файла |
 | SHA-256 mismatch | образ отличается от ожидаемого; проверьте дамп и хеш всего ISO |
 | not an XDVDFS image | это не поддерживаемый Xbox ISO/XISO либо неизвестный layout |
-| expects Sonic Heroes | другой title ID/имя, PC-версия или образ Xbox 360 |
-| Translation is incomplete / no-ops | смотрите `05-recompile.log` и `translation-summary.json`; сборка намеренно остановлена |
+| expects Sonic Heroes | другой title ID, PC-версия или образ Xbox 360. Само имя в сертификате роли не играет |
+| Strict translation gate | включён `strict_translation`; смотрите `translation-summary.json`, чтобы решить, критичны ли потери |
 | CMake/compiler error | смотрите `06-configure.log` и `07-build.log`; нужен MSVC x64 |
 | Игра падает/висит после сборки | смотрите `heroes-last-run.log`, `xbox_kernel.log`, строки `[ICALL]`, `[STUB]`, `[UNIMPL]`, `[CRASH]` |
 | Висит на NOW LOADING, 0 FPS | в логе нет `fence mirror registered` — задайте `d3d_device_ptr` и пересоберите |

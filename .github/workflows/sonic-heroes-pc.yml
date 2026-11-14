@@ -30,6 +30,11 @@ on:
         required: false
         default: ''
         type: string
+      strict_translation:
+        description: 'Строго: остановить сборку, если хоть одна функция не переведена (по умолчанию — только предупреждение)'
+        required: false
+        default: false
+        type: boolean
       build_jobs:
         description: 'Параллельные задачи MSVC (меньше — меньше памяти)'
         required: false
@@ -111,9 +116,11 @@ jobs:
           D3D_DEVICE_PTR: ${{ inputs.d3d_device_ptr }}
           D3D_PUT_OFF: ${{ inputs.d3d_put_off }}
           D3D_GET_PTR_OFF: ${{ inputs.d3d_get_ptr_off }}
+          STRICT_TRANSLATION: ${{ inputs.strict_translation }}
         run: |
           $ErrorActionPreference = 'Stop'
           $fence = @()
+          if ($env:STRICT_TRANSLATION -eq 'true') { $fence += '--strict-translation' }
           if (-not [string]::IsNullOrWhiteSpace($env:D3D_DEVICE_PTR)) {
             $fence += @('--d3d-device-ptr', $env:D3D_DEVICE_PTR.Trim())
           }
@@ -205,6 +212,7 @@ jobs:
           - XBE SHA-256: ``$($state.xbe.sha256)``
           - EXE SHA-256: ``$($state.executable.sha256)``
           - Translated functions: $($state.translation.translated)/$($state.translation.total)
+          - Translation warnings: $($state.translation.warnings -join '; ')
           - Fence mirror registered: $($state.d3d_fence.registered)
           - Compiled and PE-checked; **runtime/playability not tested**.
           - OGlue's Heroes fixes are in the runtime; without a D3D device pointer the fence ones stay dormant. Treat the result as experimental.

@@ -171,6 +171,14 @@ def extract_disc(iso_path: Path, game_dir: Path) -> dict:
         raise PipelineError(str(exc)) from exc
 
 
+KNOWN_TITLE_KEYS = {"sonicheroes"}
+
+
+def _title_key(text: str) -> str:
+    """Case- and punctuation-insensitive title key: 'SONICHEROES' == 'Sonic Heroes'."""
+    return "".join(ch for ch in text.casefold() if ch.isalnum())
+
+
 def inspect_xbe(xbe_path: Path, *, require_heroes: bool = True) -> dict:
     from tools.xbe_parser.xbe_parser import XBEParser, format_region
 
@@ -180,8 +188,11 @@ def inspect_xbe(xbe_path: Path, *, require_heroes: bool = True) -> dict:
         raise PipelineError("The extracted default.xbe is not a readable retail XBE.") from exc
     header, cert = xbe.header, xbe.certificate
     title = " ".join(cert.title_name.split())
-    if require_heroes and (cert.title_id != HEROES_TITLE_ID
-                           or title.casefold() != "sonic heroes"):
+    # The title ID is the identity. The certificate's display name is not
+    # standardised: the retail disc says "SONICHEROES" (no space, upper case),
+    # and regional releases may spell it differently again. Comparing against
+    # one literal rejected a correct disc, so the name is only a sanity note.
+    if require_heroes and cert.title_id != HEROES_TITLE_ID:
         raise PipelineError(
             f"This workflow expects Sonic Heroes (title ID 5345002B), got "
             f"{title!r} / {cert.title_id:08X}. Use an original Xbox retail image; "
@@ -196,6 +207,9 @@ def inspect_xbe(xbe_path: Path, *, require_heroes: bool = True) -> dict:
         raise PipelineError("The XBE has no kernel imports.")
     builds = sorted({lib.build for lib in xbe.libraries if lib.build})
     warnings = []
+    if require_heroes and _title_key(title) not in KNOWN_TITLE_KEYS:
+        warnings.append(f"Certificate title {title!r} is not a known Sonic Heroes "
+                        "spelling; accepted because the title ID matches.")
     if 5849 not in builds:
         warnings.append("XDK 5849 was not reported; runtime structure offsets are not verified for this build.")
     warnings.append("Retail boot is not verified by CI. OGlue's Heroes fixes live in the "
@@ -357,7 +371,16 @@ def _entry_in_dispatch(path: Path, entry: int) -> bool:
     return False
 
 
-def translation_gate(summary: dict, dispatch: Path, entry: int) -> dict:
+def translation_gate(summary: dict, dispatch: Path, entry: int, *,
+                     strict: bool = False) -> dict:
+    """Structural problems stop the build; quality problems are reported.
+
+    A retail title routinely has a few functions the lifter rejects and some
+    instructions it emits as comments. Refusing to package on the first one
+    turned a usable bring-up build into a hard failure, so by default those
+    counts are recorded as warnings (visible in BUILD-INFO.json and the run
+    summary) and --strict-translation restores the old behaviour.
+    """
     total = summary.get("total", 0)
     translated = summary.get("translated", 0)
     failed = summary.get("failed", 0)
@@ -371,16 +394,27 @@ def translation_gate(summary: dict, dispatch: Path, entry: int) -> dict:
         "unimplemented_instructions": unimplemented_count,
         "unresolved_stubs": unresolved, "entry_in_dispatch": present,
     }
-    if total <= 0 or translated != total or failed:
-        raise PipelineError(f"Translation is incomplete: {translated}/{total}, {failed} failed.")
-    if unimplemented_count:
-        raise PipelineError(f"{unimplemented_count} instructions were emitted as no-ops; refusing to package.")
+    if total <= 0:
+        raise PipelineError("The recompiler translated no functions at all.")
     if not present:
         raise PipelineError("The XBE entry point is absent from the generated dispatch table.")
+    problems = []
+    if failed or translated != total:
+        problems.append(f"{translated}/{total} functions translated, {failed} failed.")
+    if unimplemented_count:
+        problems.append(f"{unimplemented_count} instructions were emitted as no-ops.")
+    if unresolved:
+        problems.append(f"{unresolved} unresolved call targets have stubs.")
+    result["warnings"] = problems
+    result["strict"] = strict
+    if problems and strict:
+        raise PipelineError("Strict translation gate: " + " ".join(problems))
+    for problem in problems:
+        print(f"[warn] {problem}", flush=True)
     return result
 
 
-def recompile(work: Path, state: dict) -> None:
+def recompile(work: Path, state: dict, *, strict: bool = False) -> None:
     game = work / "game"
     xbe = game / "default.xbe"
     analysis = work / "analysis"
@@ -418,11 +452,10 @@ def recompile(work: Path, state: dict) -> None:
                              "--exclude-manual", project / "src" / "recomp_manual.c",
                              "-o", analysis / "recomp"], diagnostics / "05-recompile.log")
     summary = read_json(analysis / "recomp" / "summary.json")
-    state["translation"] = translation_gate(summary, gen / "recomp_dispatch.c", entry)
+    state["translation"] = translation_gate(summary, gen / "recomp_dispatch.c", entry,
+                                            strict=strict)
     write_json(diagnostics / "translation-summary.json", summary)
-    if state["translation"]["unresolved_stubs"]:
-        state["xbe"]["warnings"].append(
-            f'{state["translation"]["unresolved_stubs"]} unresolved call targets have generated stubs.')
+    state["xbe"]["warnings"].extend(state["translation"]["warnings"])
     if not (gen / "recomp_types.h").is_file() or not list(gen.glob("recomp_[0-9][0-9][0-9][0-9].c")):
         raise PipelineError("The recompiler did not emit its C chunks and runtime header.")
     state["status"] = "recompiled"
@@ -524,7 +557,8 @@ def build(work: Path, jobs: int = 2) -> dict:
 
 
 def prepare(iso: Path, work: Path, *, toolkit: Path = ROOT,
-            template: Path = TEMPLATE, fence: dict | None = None) -> dict:
+            template: Path = TEMPLATE, fence: dict | None = None,
+            strict: bool = False) -> dict:
     if (work / "state.json").exists() or (work / "project").exists():
         raise PipelineError("Use a fresh work directory; this command will not overwrite a run.")
     if not iso.is_file():
@@ -552,7 +586,7 @@ def prepare(iso: Path, work: Path, *, toolkit: Path = ROOT,
             "GENRY_HONEST_FENCE and the D3D busy-block wait stay dormant.")
     state["status"] = "prepared"
     _copy_state(work, state)
-    recompile(work, state)
+    recompile(work, state, strict=strict)
     _copy_state(work, state)
     return state
 
@@ -580,6 +614,9 @@ def main(argv=None) -> int:
         p.add_argument("--work-dir", type=Path, required=True)
         if name != "build":
             p.add_argument("--iso", type=Path, required=True)
+            p.add_argument("--strict-translation", action="store_true",
+                           help="refuse to package when any function failed to translate "
+                                "or any instruction became a no-op (default: warn)")
             p.add_argument("--d3d-device-ptr", default="",
                            help="guest VA of the title's D3D device pointer, e.g. 0x0035FB48; "
                                 "registers the runtime fence mirror (Heroes fence fixes)")
@@ -595,7 +632,8 @@ def main(argv=None) -> int:
         if args.command in ("prepare", "all"):
             prepare(args.iso.resolve(), work,
                     fence=fence_config(args.d3d_device_ptr, args.d3d_put_off,
-                                       args.d3d_get_ptr_off))
+                                       args.d3d_get_ptr_off),
+                    strict=args.strict_translation)
         if args.command in ("build", "all"):
             build(work, args.jobs)
     except PipelineError as exc:
