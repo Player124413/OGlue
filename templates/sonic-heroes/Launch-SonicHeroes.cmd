@@ -7,7 +7,11 @@ if errorlevel 1 (
   exit /b 1
 )
 if not exist "game\default.xbe" (
-  echo Missing game\default.xbe. Download the game artifact, not only the source artifact.
+  echo.
+  echo Missing game\default.xbe. This archive ships no game assets.
+  echo Copy your own game files into the "game" folder first.
+  echo See HOW-TO-ADD-GAME-FILES.md in this folder.
+  echo.
   pause
   exit /b 1
 )

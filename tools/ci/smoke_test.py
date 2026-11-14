@@ -61,7 +61,11 @@ def run(work: Path, jobs: int, generate_only: bool) -> None:
     state = H.build(work, jobs)
     package = work / "artifacts" / "game"
     assert (package / H.EXE_NAME).is_file()
-    assert (package / "game" / "default.xbe").read_bytes() == xbe.read_bytes()
+    # The game artifact ships the executable and instructions, never assets.
+    assert not (package / "game" / "default.xbe").exists()
+    assert (package / "HOW-TO-ADD-GAME-FILES.md").is_file()
+    assert not [p for p in package.rglob("*")
+                if p.is_file() and p.suffix.lower() in H.GAME_SUFFIXES]
     assert state["validation"]["compiled"] and state["validation"]["pe_checked"]
     assert not state["validation"]["runtime_tested"]
     assert not list((work / "project").rglob("*.xbe"))

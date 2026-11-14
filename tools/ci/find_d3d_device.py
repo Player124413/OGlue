@@ -139,6 +139,8 @@ def _cells_pointing_at(data: bytes, sections, device_va: int) -> list[int]:
 def find_candidates(xbe_path: Path, *, put_off: int = PUT_OFF,
                     get_ptr_off: int = GET_PTR_OFF) -> list[dict]:
     """Scan a user's own XBE. Needs no analysis JSON and writes nothing."""
+    import struct
+
     from tools.xbe_parser.xbe_parser import XBEParser
 
     xbe = XBEParser(str(xbe_path)).parse()
@@ -158,6 +160,13 @@ def find_candidates(xbe_path: Path, *, put_off: int = PUT_OFF,
                                 < s.virtual_addr + s.virtual_size), "?")
                 score = 2 if hit["busy_event"] else 1
                 score += 1 if hit["kind"] == "global" else 0
+                # D3D's own device pointer lives in the D3D library's data and is
+                # read by that library's code. A game object that merely happens
+                # to have fields at +0x2C/+0x30 sits in .data and is read from
+                # .text -- the common false positive.
+                same_library = section == sec.name and section.upper().startswith("D3D")
+                if same_library:
+                    score += 2
                 previous = results.get(cell)
                 if previous is None or score > previous["score"]:
                     results[cell] = {
@@ -167,9 +176,30 @@ def find_candidates(xbe_path: Path, *, put_off: int = PUT_OFF,
                         "evidence_va": f"0x{hit['evidence_va']:08X}",
                         "busy_event_hint": hit["busy_event"],
                         "origin": hit["kind"],
+                        "d3d_library_cell": same_library,
                         "score": score,
                     }
-    return sorted(results.values(), key=lambda c: (-c["score"], c["device_ptr_va"]))
+    # The real device pointer is referenced all over the library; a coincidental
+    # game object is not. Count absolute-address occurrences in code as a
+    # tie-breaker, and report it so the choice is visible rather than implied.
+    for item in results.values():
+        needle = struct.pack("<I", int(item["device_ptr_va"], 16))
+        item["code_references"] = _count_references(data, sections, needle)
+    return sorted(results.values(),
+                  key=lambda c: (-c["score"], -c["code_references"], c["device_ptr_va"]))
+
+
+def _count_references(data: bytes, sections, needle: bytes) -> int:
+    total = 0
+    for sec in sections:
+        if not (sec.flags & 0x4):
+            continue
+        blob = data[sec.raw_addr:sec.raw_addr + sec.raw_size]
+        start = blob.find(needle)
+        while start != -1:
+            total += 1
+            start = blob.find(needle, start + 1)
+    return total
 
 
 def main(argv=None) -> int:
@@ -195,7 +225,9 @@ def main(argv=None) -> int:
     print("Candidates for --d3d-device-ptr (heuristic, verify by running):")
     for item in candidates[:max(1, args.limit)]:
         hint = " +busy KEVENT" if item["busy_event_hint"] else ""
+        hint += " +D3D-library cell" if item.get("d3d_library_cell") else ""
         print(f"  {item['device_ptr_va']}  score {item['score']}  "
+              f"refs {item.get('code_references', 0)}  "
               f"cell in {item['section']}, from {item['code_section']}:"
               f"{item['evidence_va']}{hint}")
     best = candidates[0]["device_ptr_va"]

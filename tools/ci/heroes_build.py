@@ -497,6 +497,93 @@ def _hash_tree(directory: Path, exclude: set[str]) -> list[dict]:
     return result
 
 
+def write_game_files_readme(package: Path, state: dict) -> None:
+    """The game artifact ships no assets: tell the user exactly what to add."""
+    xbe = state.get("xbe", {})
+    iso = state.get("iso", {})
+    fence = state.get("d3d_fence", {})
+    fence_line = (f"зеркало fence включено, указатель устройства {fence.get('device_ptr_va')}"
+                  if fence.get("registered") else
+                  "зеркало fence НЕ включено (адрес D3D-устройства не задавался)")
+    text = f"""# Куда положить файлы игры
+
+В этом архиве **только рекомпилированная игра** — `SonicHeroesPC.exe`. Оригинальные
+файлы игры (assets) сюда не входят и не распространяются. Добавьте их сами из
+своего образа Sonic Heroes для Original Xbox.
+
+## Из какого образа собрана эта версия
+
+| | |
+|---|---|
+| Название в сертификате | `{xbe.get('title', '?')}` |
+| Title ID | `{xbe.get('title_id', '?')}` |
+| Регион | {xbe.get('region', '?')} |
+| SHA-256 всего ISO | `{iso.get('sha256', '?')}` |
+| SHA-256 `default.xbe` | `{xbe.get('sha256', '?')}` |
+| Особенности сборки | {fence_line} |
+
+При запуске игра сверяет SHA-256 `game\\default.xbe` с тем, под который она собрана.
+Нужен **тот же самый дамп**, не другой регион и не другая версия.
+
+## Какая структура должна получиться
+
+```
+SonicHeroesPC.exe
+Launch-SonicHeroes.cmd
+HOW-TO-ADD-GAME-FILES.md      <- этот файл
+game\\
+    default.xbe
+    ...все остальные папки и файлы из образа, без переименования
+```
+
+## Способ 1 — распаковать ISO встроенным распаковщиком
+
+Нужен Python 3.10+. Распаковщик лежит в архиве исходников
+(`SonicHeroes-PC-Recompilation-Source`) в папке `oglue`, либо в этом репозитории.
+
+```bat
+cd <папка исходников>\\oglue
+python -m tools.xiso unpack "C:\\Images\\SonicHeroes.iso" -o "<папка с exe>\\game"
+```
+
+Ничего дополнительно устанавливать не нужно: `tools.xiso` читает образ сам.
+
+## Способ 2 — скопировать уже распакованную папку
+
+Если игра уже распакована (например, с консоли), скопируйте **содержимое** диска
+в папку `game` так, чтобы получился `game\\default.xbe`, а рядом лежали остальные
+папки образа. Имена и вложенность менять нельзя.
+
+## Проверка
+
+PowerShell из папки с exe:
+
+```powershell
+Get-FileHash .\\game\\default.xbe -Algorithm SHA256
+```
+
+Значение должно совпасть с SHA-256 `default.xbe` из таблицы выше.
+
+## Запуск
+
+Запустите `Launch-SonicHeroes.cmd`. Управление, требования и диагностика —
+в `README-RU.md`. Сохранения: `%LOCALAPPDATA%\\xboxrecomp`.
+
+## Если хеш не совпал
+
+Игра откажется стартовать: этот EXE собран под конкретный дамп. Либо возьмите тот
+же образ, из которого шла сборка, либо перезапустите workflow со своим образом —
+он соберёт EXE под него.
+"""
+    (package / "HOW-TO-ADD-GAME-FILES.md").write_text(text, encoding="utf-8")
+    (package / "game").mkdir(exist_ok=True)
+    (package / "game" / "PUT-GAME-FILES-HERE.txt").write_text(
+        "Сюда кладутся файлы игры: default.xbe и остальные папки образа.\n"
+        "Подробно: ..\\HOW-TO-ADD-GAME-FILES.md\n"
+        f"Ожидаемый SHA-256 default.xbe: {xbe.get('sha256', '?')}\n",
+        encoding="utf-8")
+
+
 def package_game(work: Path, state: dict) -> Path:
     package = work / "artifacts" / "game"
     if package.exists():
@@ -504,9 +591,13 @@ def package_game(work: Path, state: dict) -> Path:
     package.mkdir(parents=True)
     exe = work / "build" / "Release" / EXE_NAME
     shutil.copy2(exe, package / EXE_NAME)
-    shutil.copytree(work / "game", package / "game")
     for name in ("Launch-SonicHeroes.cmd", "README-RU.md"):
         shutil.copy2(TEMPLATE / name, package / name)
+    write_game_files_readme(package, state)
+    # No assets: the extracted tree stays on the runner and is never uploaded.
+    for path in package.rglob("*"):
+        if path.is_file() and path.suffix.lower() in GAME_SUFFIXES:
+            raise PipelineError("Refusing to ship original game data in the game artifact.")
     write_json(package / "BUILD-INFO.json", state)
     sums = _hash_tree(package, {"SHA256SUMS.txt"})
     (package / "SHA256SUMS.txt").write_text(

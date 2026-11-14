@@ -1,5 +1,6 @@
 import json
 import struct
+from pathlib import Path
 
 import pytest
 
@@ -198,6 +199,44 @@ def test_scaffold_records_fence_pointer(tmp_path):
     assert "#define HEROES_D3D_DEVICE_PTR 0x0035FB48u" in config
     assert "#define HEROES_D3D_PUT_OFF 0x2Cu" in config
     assert "#define HEROES_D3D_GET_PTR_OFF 0x30u" in config
+
+
+def _fake_built_work(tmp_path):
+    work = tmp_path / "work"
+    (work / "build" / "Release").mkdir(parents=True)
+    (work / "build" / "Release" / H.EXE_NAME).write_bytes(b"MZ-fake-exe")
+    (work / "game").mkdir()
+    (work / "game" / "default.xbe").write_bytes(b"original game code")
+    (work / "game" / "media.xmv").write_bytes(b"original video")
+    state = {"xbe": {"title": "SONICHEROES", "title_id": "5345002B",
+                     "region": "North America", "sha256": "c" * 64},
+             "iso": {"sha256": "d" * 64},
+             "d3d_fence": {"registered": False}}
+    return work, state
+
+
+def test_game_artifact_ships_no_assets_and_explains_where_to_put_them(tmp_path):
+    work, state = _fake_built_work(tmp_path)
+    package = H.package_game(work, state)
+    names = {p.relative_to(package).as_posix() for p in package.rglob("*") if p.is_file()}
+    assert H.EXE_NAME in names
+    assert "HOW-TO-ADD-GAME-FILES.md" in names
+    assert "game/PUT-GAME-FILES-HERE.txt" in names
+    # Nothing from the extracted disc: no XBE, no video, no data tree.
+    assert not any(Path(n).suffix.lower() in H.GAME_SUFFIXES for n in names)
+    assert "game/default.xbe" not in names
+    readme = (package / "HOW-TO-ADD-GAME-FILES.md").read_text(encoding="utf-8")
+    assert "c" * 64 in readme                     # expected XBE hash
+    assert "tools.xiso unpack" in readme          # how to extract
+    assert "SONICHEROES" in readme
+
+
+def test_game_artifact_readme_records_the_fence_state(tmp_path):
+    work, state = _fake_built_work(tmp_path)
+    state["d3d_fence"] = {"registered": True, "device_ptr_va": 0x0033BC38}
+    package = H.package_game(work, state)
+    readme = (package / "HOW-TO-ADD-GAME-FILES.md").read_text(encoding="utf-8")
+    assert "зеркало fence включено" in readme
 
 
 def test_pe_summary_requires_x64_pe32plus(tmp_path):

@@ -22,9 +22,11 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release --target SonicHeroesPC --parallel 2
 ```
 
-Put the `game/` folder from the matching game artifact beside
-`build/Release/SonicHeroesPC.exe`, or run the packaged launcher from that
-artifact. The host verifies the XBE SHA-256 before executing generated code.
+Neither artifact contains game assets. Extract your own ISO into a `game/`
+folder beside `build/Release/SonicHeroesPC.exe` (the packaged game artifact
+carries `HOW-TO-ADD-GAME-FILES.md` with the expected hash and the exact command:
+`python -m tools.xiso unpack your.iso -o game`). The host verifies the XBE
+SHA-256 before executing generated code.
 
 ## Regenerate from your ISO
 

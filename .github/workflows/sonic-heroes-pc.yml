@@ -169,7 +169,7 @@ jobs:
           python -m tools.ci.heroes_build build --work-dir "$env:HEROES_WORK" --jobs "$($env:BUILD_JOBS)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Upload recompiled game (EXE + your game data)
+      - name: Upload recompiled game (EXE only, no assets)
         if: success()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -207,8 +207,9 @@ jobs:
           $state = Get-Content "$env:HEROES_WORK/state.json" -Raw | ConvertFrom-Json
           $text = @"
           ## Sonic Heroes PC
-          - Game artifact: **SonicHeroes-PC-Windows-x64**
+          - Game artifact: **SonicHeroes-PC-Windows-x64** (EXE + instructions, no game assets)
           - Source artifact: **SonicHeroes-PC-Recompilation-Source**
+          - Add your own game files to `game/` — see `HOW-TO-ADD-GAME-FILES.md` inside the game artifact.
           - XBE SHA-256: ``$($state.xbe.sha256)``
           - EXE SHA-256: ``$($state.executable.sha256)``
           - Translated functions: $($state.translation.translated)/$($state.translation.total)
