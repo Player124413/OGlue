@@ -1,0 +1,2 @@
+# Python pipeline dependency. Keep the CI and local builds on one lifter input.
+capstone==5.0.9
