@@ -1,0 +1,40 @@
+# Build output
+build/
+out/
+dist/
+regenerated*/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.exe
+
+# Original game data: never commit it. Get it from your own disc.
+game/
+game_files/
+*.iso
+*.xiso
+*.xbe
+
+# Runtime output
+*.log
+heroes-last-run.log
+xbox_kernel.log
+
+# Python / tooling
+__pycache__/
+*.pyc
+.venv/
+.cache/
+.work/
+tools/disasm/output/
+tools/func_id/output/
+tools/recomp/output/
+tools/abi_analysis/output/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user

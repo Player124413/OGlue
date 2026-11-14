@@ -7,7 +7,7 @@ Workflow: [`.github/workflows/sonic-heroes-pc.yml`](../.github/workflows/sonic-h
 | Артефакт | Содержимое |
 |---|---|
 | `SonicHeroes-PC-Windows-x64` | **только** `SonicHeroesPC.exe`, лаунчер, `HOW-TO-ADD-GAME-FILES.md`, README, checksum и build metadata. Файлов игры нет |
-| `SonicHeroes-PC-Recompilation-Source` | сгенерированный C, host-проект, исходники OGlue/runtime, инструкции пересборки и manifest |
+| `SonicHeroes-PC-Recompilation-Source` | готовый к публикации репозиторий: сгенерированный C, host-проект, исходники OGlue/runtime, `.gitignore`, своя CI, README и manifest. Лаунчера и игровых файлов нет |
 | `SonicHeroes-PC-Diagnostics` | логи этапов и сводки; создаётся и при ошибке. Сам ISO и папка `game` туда не попадают |
 
 ## Сначала важное
@@ -214,7 +214,7 @@ ISO и извлечённые файлы игры не публикуются к
 
 ```
 SonicHeroesPC.exe
-Launch-SonicHeroes.cmd
+Launch-SonicHeroes.cmd     <- только здесь, для игрока
 HOW-TO-ADD-GAME-FILES.md   <- куда положить файлы, ожидаемый SHA-256, команды
 README-RU.md               <- управление, требования, диагностика
 BUILD-INFO.json
@@ -222,6 +222,50 @@ SHA256SUMS.txt
 game/
     PUT-GAME-FILES-HERE.txt
 ```
+
+Внутри архива исходников — дерево, которое можно сразу запушить на GitHub:
+
+```
+.github/workflows/build.yml   <- пересборка EXE на windows-2022, без ISO
+.gitignore                    <- исключает build/, game/, *.iso, *.xbe, логи
+CMakeLists.txt
+README.md                     <- сборка, запуск, публикация
+src/                          <- host + сгенерированный C + game_config.h
+oglue/                        <- runtime, рекомпилятор, инструменты
+BUILD-INFO.json
+SOURCE-MANIFEST.json
+```
+
+Лаунчер `.cmd` в исходники не кладётся: он нужен только для запуска готовой игры.
+
+## Публикация исходников на GitHub
+
+Распакуйте `SonicHeroes-PC-Recompilation-Source` и из этой папки:
+
+```bat
+git init
+git add .
+git commit -m "Sonic Heroes recompilation"
+git branch -M main
+git remote add origin https://github.com/<вы>/<репозиторий>.git
+git push -u origin main
+```
+
+Дальше можно работать как в обычном репозитории: `.github/workflows/build.yml`
+пересобирает EXE из уже закоммиченного C на push в `main`, на pull request и по
+кнопке **Actions → Build SonicHeroesPC → Run workflow**. ISO для этого не нужен —
+CI только компилирует исходники и отдаёт артефакт `SonicHeroesPC-Windows-x64`
+(EXE без assets). Секреты не требуются.
+
+Перед первым push стоит проверить две вещи:
+
+- **Размер.** Сгенерированного C много. GitHub отклоняет файлы больше 100 МБ и
+  предупреждает при 50 МБ; если чанк из `src/recomp/gen/` оказался таким, включите
+  Git LFS или дробите сильнее (`--split`).
+- **Права.** Сгенерированный C и EXE — производные от вашей копии игры. Код OGlue
+  под MIT/LGPL, но это не даёт права распространять код Sega. Публичная публикация —
+  ваше решение; приватный репозиторий безопаснее. Игровые файлы не коммитьте:
+  `.gitignore` закрывает обычные пути, но переименованный файл не поймает.
 
 ## Локальный запуск с локальным ISO
 

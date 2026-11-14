@@ -28,6 +28,10 @@ ROOT = Path(__file__).resolve().parents[2]
 if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 TEMPLATE = ROOT / "templates" / "sonic-heroes"
+# Player-facing extras live apart from the source template so the source
+# artifact stays a clean, publishable repository (no launcher, no run README).
+PACKAGE_TEMPLATE = ROOT / "templates" / "sonic-heroes-package"
+LAUNCHER_NAME = "Launch-SonicHeroes.cmd"
 HEROES_TITLE_ID = 0x5345002B
 EXE_NAME = "SonicHeroesPC.exe"
 # XDK 5849 D3D device layout: the submitted counter and the pointer to the
@@ -591,8 +595,8 @@ def package_game(work: Path, state: dict) -> Path:
     package.mkdir(parents=True)
     exe = work / "build" / "Release" / EXE_NAME
     shutil.copy2(exe, package / EXE_NAME)
-    for name in ("Launch-SonicHeroes.cmd", "README-RU.md"):
-        shutil.copy2(TEMPLATE / name, package / name)
+    for name in (LAUNCHER_NAME, "README-RU.md"):
+        shutil.copy2(PACKAGE_TEMPLATE / name, package / name)
     write_game_files_readme(package, state)
     # No assets: the extracted tree stays on the runner and is never uploaded.
     for path in package.rglob("*"):
@@ -606,10 +610,15 @@ def package_game(work: Path, state: dict) -> Path:
 
 
 def finalize_source(work: Path, state: dict) -> None:
+    """The source artifact is a publishable repo: code, CI, docs -- no launcher."""
     project = work / "project"
     for path in project.rglob("*"):
-        if path.is_file() and path.suffix.lower() in GAME_SUFFIXES:
+        if not path.is_file():
+            continue
+        if path.suffix.lower() in GAME_SUFFIXES:
             raise PipelineError("Refusing to upload original game data in the source artifact.")
+        if path.name == LAUNCHER_NAME:
+            raise PipelineError("The player launcher belongs to the game artifact, not the source.")
     write_json(project / "SOURCE-MANIFEST.json", {
         "note": "Generated C is derived from the user's XBE. Original assets are not included.",
         "files": _hash_tree(project, {"SOURCE-MANIFEST.json"}),

@@ -231,6 +231,45 @@ def test_game_artifact_ships_no_assets_and_explains_where_to_put_them(tmp_path):
     assert "SONICHEROES" in readme
 
 
+def test_source_template_is_a_publishable_repo_without_the_launcher():
+    # The user publishes this tree on GitHub and works there; a player-facing
+    # .cmd has no business in it.
+    template = H.TEMPLATE
+    assert not (template / H.LAUNCHER_NAME).exists()
+    assert not list(template.rglob("*.cmd"))
+    assert (template / ".gitignore").is_file()
+    assert (template / ".github" / "workflows" / "build.yml").is_file()
+    ignored = (template / ".gitignore").read_text(encoding="utf-8")
+    for pattern in ("build/", "game/", "*.xbe", "*.iso"):
+        assert pattern in ignored
+    # The launcher still ships to players, from its own template.
+    assert (H.PACKAGE_TEMPLATE / H.LAUNCHER_NAME).is_file()
+
+
+def test_scaffold_carries_ci_and_gitignore_into_the_project(tmp_path):
+    metadata = {"entry_point": "0x00011000", "sha256": "a" * 64}
+    toolkit = tmp_path / "toolkit"
+    toolkit.mkdir()
+    (toolkit / "README.md").write_text("toolkit\n")
+    project = tmp_path / "project"
+    H.scaffold_project(project, metadata, toolkit=toolkit)
+    assert (project / ".github" / "workflows" / "build.yml").is_file()
+    assert (project / ".gitignore").is_file()
+    assert not (project / H.LAUNCHER_NAME).exists()
+
+
+def test_finalize_source_rejects_the_player_launcher(tmp_path):
+    work = tmp_path / "work"
+    project = work / "project"
+    project.mkdir(parents=True)
+    (project / "CMakeLists.txt").write_text("project(x C)\n")
+    H.finalize_source(work, {})
+    assert (project / "SOURCE-MANIFEST.json").is_file()
+    (project / H.LAUNCHER_NAME).write_text("@echo off\n")
+    with pytest.raises(H.PipelineError, match="launcher"):
+        H.finalize_source(work, {})
+
+
 def test_game_artifact_readme_records_the_fence_state(tmp_path):
     work, state = _fake_built_work(tmp_path)
     state["d3d_fence"] = {"registered": True, "device_ptr_va": 0x0033BC38}

@@ -31,7 +31,10 @@ jobs:
           python -m pip install --disable-pip-version-check -r tools/ci/requirements.txt \
             pytest==9.2.0 actionlint-py==1.7.12.25
       - name: Lint GitHub Actions workflows
-        run: actionlint -color .github/workflows/*.yml
+        # The generated project ships its own CI; lint that template too.
+        run: |
+          actionlint -color .github/workflows/*.yml
+          actionlint -color templates/sonic-heroes/.github/workflows/*.yml
       - name: Run no-game tests
         run: >-
           python -m pytest tools/ci tools/xiso/test_xdvdfs.py

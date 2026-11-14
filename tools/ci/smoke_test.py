@@ -69,6 +69,13 @@ def run(work: Path, jobs: int, generate_only: bool) -> None:
     assert state["validation"]["compiled"] and state["validation"]["pe_checked"]
     assert not state["validation"]["runtime_tested"]
     assert not list((work / "project").rglob("*.xbe"))
+    # The source artifact is what the user pushes to GitHub: CI and .gitignore
+    # come along, the player launcher does not.
+    project = work / "project"
+    assert (project / ".github" / "workflows" / "build.yml").is_file()
+    assert (project / ".gitignore").is_file()
+    assert not list(project.rglob("*.cmd"))
+    assert (package / H.LAUNCHER_NAME).is_file()
     print("Synthetic Windows compile/link/package OK. No retail game was used or executed.")
 
 
