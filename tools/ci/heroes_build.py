@@ -272,7 +272,7 @@ def source_provenance(toolkit: Path) -> dict:
 def _parse_hex(text: str) -> int:
     value = (text or "").strip()
     if not re.fullmatch(r"(?:0[xX])?[0-9a-fA-F]{1,8}", value):
-        raise PipelineError("Expected up to 8 hex digits, e.g. 0x0035D6A0 or 2C.")
+        raise PipelineError("Expected up to 8 hex digits, e.g. 0x0035FB48 or 2C.")
     return int(value, 16)
 
 
@@ -581,7 +581,7 @@ def main(argv=None) -> int:
         if name != "build":
             p.add_argument("--iso", type=Path, required=True)
             p.add_argument("--d3d-device-ptr", default="",
-                           help="guest VA of the title's D3D device pointer, e.g. 0x0035D6A0; "
+                           help="guest VA of the title's D3D device pointer, e.g. 0x0035FB48; "
                                 "registers the runtime fence mirror (Heroes fence fixes)")
             p.add_argument("--d3d-put-off", default="",
                            help=f"device submitted-counter offset (default 0x{DEFAULT_D3D_PUT_OFF:X})")

@@ -66,20 +66,59 @@ Workflow: [`.github/workflows/sonic-heroes-pc.yml`](../.github/workflows/sonic-h
 
 | Поле workflow / флаг CLI | Значение |
 |---|---|
-| `d3d_device_ptr` / `--d3d-device-ptr` | адрес указателя на устройство, напр. `0x0035D6A0`; пусто = зеркало не регистрируется |
+| `d3d_device_ptr` / `--d3d-device-ptr` | адрес **ячейки**, в которой лежит указатель на устройство; пусто = зеркало не регистрируется |
 | `d3d_put_off` / `--d3d-put-off` | смещение счётчика отправок; пусто = `0x2C` (XDK 5849) |
 | `d3d_get_ptr_off` / `--d3d-get-ptr-off` | смещение указателя «прочитано GPU»; пусто = `0x30` (XDK 5849) |
 
 Смещения по умолчанию взяты из `docs/technical/d3d8ltcg-device-context.md`
-(`+0x2C` — write sequence, `+0x30` — указатель на позицию чтения GPU). Адрес ищется в
-дизассемблере по коду D3D: цикл ожидания сравнивает `[device+0x2C]` с `*[device+0x30]`,
-а глобальная ячейка, из которой загружается `device`, и есть искомый адрес.
+(`+0x2C` — write sequence, `+0x30` — указатель на позицию чтения GPU).
+
+### какое именно число и как его найти
+
+Нужен **адрес ячейки**, а не адрес самого устройства. Runtime делает так:
+
+```c
+dev = *(uint32_t *)device_ptr_va;   /* device_ptr_va — то, что вы вводите */
+put = dev + 0x2C;                   /* счётчик отправок */
+get = *(uint32_t *)(dev + 0x30);    /* слово «прочитано GPU» */
+```
+
+Пример из `docs/technical/d3d8ltcg-device-context.md` (это **Burnout 3**, не Heroes):
+устройство лежит по `0x0035D6A0`, а ячейка указателя — `0x35FB48`. Вводить нужно
+`0x0035FB48`. Для вашего дампа Heroes адрес будет другим.
+
+Поиск автоматизирован — отдельный инструмент читает ваш `default.xbe` и ранжирует
+кандидатов по характерной форме стокового ожидания D3D:
+
+```bat
+python -m tools.ci.find_d3d_device game\default.xbe --json candidates.json
+```
+
+Он ищет регистр, загруженный из глобальной ячейки, у которого затем читаются оба
+поля `+0x2C` и `+0x30`; дополнительное `+0x1DCC` (KEVENT ожидания) повышает оценку.
+Вывод:
+
+```
+Candidates for --d3d-device-ptr (heuristic, verify by running):
+  0x003xxxxx  score 3  cell in .data, from D3D:0x003xxxxx +busy KEVENT
+
+Start with:  --d3d-device-ptr 0x003xxxxx
+```
+
+Это эвристика: инструмент только печатает кандидатов и ничего не подставляет в
+сборку. Проверка — запуск: в логе должно появиться `NV2A fence mirror: device at ...`,
+а игра должна пройти NOW LOADING.
+
+Тот же поиск выполняется и в workflow (шаг «Find D3D device pointer candidates»),
+его результат попадает в `SonicHeroes-PC-Diagnostics/d3d-device-candidates.json`
+и в сводку запуска. Поэтому можно сначала запустить без адреса, взять кандидата
+из сводки и перезапустить с ним.
 
 В логе запуска видно, что получилось:
 
 ```
-[BOOT] fence mirror registered: device ptr 0x0035D6A0
-  NV2A fence mirror: device at 0x0035D6A0, PUT +0x2C -> *(GET +0x30)
+[BOOT] fence mirror registered: device ptr 0x0035FB48
+  NV2A fence mirror: device at 0x0035FB48, PUT +0x2C -> *(GET +0x30)
 ```
 
 или, если адрес не задан:

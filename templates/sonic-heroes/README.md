@@ -40,7 +40,7 @@ To enable the fence fixes, add the title's D3D device pointer (see
 `oglue/docs/SONIC_HEROES_PC_RU.md`):
 
 ```bat
-python -m tools.ci.heroes_build all --iso C:\path\to\sonic-heroes.iso --work-dir ..\regenerated2 --jobs 2 --d3d-device-ptr 0x0035D6A0
+python -m tools.ci.heroes_build all --iso C:\path\to\sonic-heroes.iso --work-dir ..\regenerated2 --jobs 2 --d3d-device-ptr 0x0035FB48
 ```
 
 The new project is `regenerated/project`; the executable is
