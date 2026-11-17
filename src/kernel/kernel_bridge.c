@@ -27,6 +27,7 @@
 
 #include "genry_movie_skip.h"
 #include "kernel.h"
+#include "kernel_thunk_slots.h"
 #include "guest_vmem.h"
 #include "kernel_missing.h"
 #include "xbox_memory_layout.h"
@@ -11352,8 +11353,9 @@ void xbox_kernel_bridge_init(void)
      * Halo that hung main() in a file-enumeration loop before it reached any
      * initialisation.
      *
-     * Only entries still carrying the ordinal marker are touched, so scanning
-     * back over unrelated .rdata is harmless.
+     * A set high bit alone is not proof of a thunk: unrelated code/data can
+     * have it too. Reject impossible ordinal values before patching memory.
+     * Even an in-range value is only a heuristic, not proof of an import.
      */
     {
         const int LOOKBEHIND = 16;   /* entries, i.e. 64 bytes */
