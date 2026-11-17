@@ -19,6 +19,7 @@
 
 #include "kernel.h"
 #include "xbox_memory_layout.h"
+#include "kernel_thunk_slots.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -335,8 +336,11 @@ ULONG_PTR xbox_resolve_ordinal(ULONG ordinal)
     case 164: return (ULONG_PTR)&xbox_LaunchDataPage;
 
     default:
-        xbox_log(XBOX_LOG_ERROR, XBOX_LOG_THUNK,
-            "Unresolved kernel ordinal %u", ordinal);
+        /* This is the legacy host-pointer table, not the guest bridge. The
+         * latter performs its own ordinal remapping and reports unbridged
+         * calls independently. Do not claim that the game import is absent. */
+        xbox_log(XBOX_LOG_DEBUG, XBOX_LOG_THUNK,
+            "Legacy host thunk has no handler for raw ordinal %u", ordinal);
         return 0;
     }
 }
@@ -351,7 +355,7 @@ ULONG_PTR xbox_resolve_ordinal(ULONG ordinal)
  * runtime -- it exists to keep the table populated when there is no XBE.
  * ============================================================================ */
 
-static const ULONG g_thunk_ordinals[XBOX_KERNEL_THUNK_TABLE_SIZE] = {
+static const uint32_t g_thunk_ordinals[] = {
       1,   2,   3,   4,   8,  15,  16,  17,  23,  24,   /* 0-9   */
      40,  41,  42,  44,  46,  47,  49,  62,  65,  67,   /* 10-19 */
      69,  71,  74,  81,  83,  84,  85,  86,  87,  95,   /* 20-29 */
@@ -449,47 +453,36 @@ void xbox_kernel_init(void)
         xbox_KrnlVersion.Major, xbox_KrnlVersion.Minor,
         xbox_KrnlVersion.Build, xbox_KrnlVersion.Qfe);
 
-    /* Fill thunk table.
-     *
-     * The slot->ordinal mapping normally comes from the in-memory thunk table
-     * of the loaded XBE (0x80000000|ordinal per entry, same source the kernel
-     * bridge reads). That makes the table match any title's import order.
-     * Without a mapped XBE, fall back to the static reference list below. */
+    /* The host-pointer table is distinct from the actual guest bridge. When
+     * an XBE is mapped, consume only its counted imports, never padded fallback
+     * entries. The guest bridge separately handles canonical ordinal remapping. */
     xbox_kernel_get_thunk_address(&thunk_base, &thunk_count);
+    const volatile uint32_t *mapped = NULL;
+    if (thunk_base && xbox_GetMemoryBase()) {
+        mapped = (const volatile uint32_t *)
+            ((uintptr_t)thunk_base + g_xbox_mem_offset);
+    }
     for (ULONG i = 0; i < XBOX_KERNEL_THUNK_TABLE_SIZE; i++) {
-        ULONG ordinal;
-
-        if (thunk_base && i < thunk_count && xbox_GetMemoryBase()) {
-            uint32_t entry = *(volatile uint32_t *)
-                ((uintptr_t)(thunk_base + i * 4) + g_xbox_mem_offset);
-            if (entry == 0) {
-                break;  /* rest of the table is empty */
-            }
-            ordinal = entry & 0x7FFFFFFF;
-        } else {
-            ordinal = g_thunk_ordinals[i];
-        }
+        uint32_t ordinal;
+        if (!xbox_legacy_thunk_ordinal(mapped, thunk_count, g_thunk_ordinals,
+                sizeof(g_thunk_ordinals) / sizeof(g_thunk_ordinals[0]), i, &ordinal))
+            break;
 
         ULONG_PTR ptr = xbox_resolve_ordinal(ordinal);
-
         if (ptr) {
             xbox_kernel_thunk_table[i] = ptr;
             resolved++;
         } else {
-            /* Point unresolved thunks to our error handler */
             xbox_kernel_thunk_table[i] = (ULONG_PTR)xbox_unresolved_thunk;
             unresolved++;
         }
     }
 
     xbox_log(XBOX_LOG_INFO, XBOX_LOG_THUNK,
-        "Thunk table: %u/%u resolved, %u unresolved",
-        resolved, XBOX_KERNEL_THUNK_TABLE_SIZE, unresolved);
-
-    if (unresolved > 0) {
-        xbox_log(XBOX_LOG_WARN, XBOX_LOG_THUNK,
-            "WARNING: %u kernel imports are unresolved - game may crash!", unresolved);
-    }
+        "Legacy host thunk table (%s): %u/%u resolved, %u missing host handlers; "
+        "guest bridge reports its own status separately",
+        mapped ? "XBE raw ordinals" : "reference fallback",
+        resolved, resolved + unresolved, unresolved);
 
     xbox_log(XBOX_LOG_INFO, XBOX_LOG_THUNK,
         "=== Xbox Kernel Replacement Layer ready ===");
