@@ -11368,8 +11368,8 @@ void xbox_kernel_bridge_init(void)
             uint32_t current = BRIDGE_MEM32(va);
             int slot;
 
-            if (!(current & 0x80000000)) {
-                continue;            /* NULL separator or ordinary data */
+            if (!xbox_plausible_extra_thunk(current, XBOX_KERNEL_THUNK_TABLE_SIZE)) {
+                continue;            /* NULL, ordinary data, or impossible ordinal */
             }
             slot = g_thunk_table_count + i;   /* park these above the main run */
             if (slot >= XBOX_KERNEL_THUNK_TABLE_SIZE) {
